@@ -3,3 +3,5 @@
 
 ## update list
 2022.10.01 实现高可扩展的Dataset自定义
+
+2022.10.02 实现 positional encoding
