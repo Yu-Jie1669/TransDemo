@@ -2,7 +2,9 @@ from typing import Iterator
 
 import paddle
 
-from vocabulary import Vocabulary
+from trandemo.data.vocabulary import Vocabulary
+
+
 
 
 class IterBase(Iterator):

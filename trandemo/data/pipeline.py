@@ -1,5 +1,5 @@
-from vocabulary import Vocabulary
-from trandemo.data.dataset import LineDataset, EncodedDataset, ZippedDataset, BatchedDataset, PaddedDataset, \
+from trandemo.data.vocabulary import Vocabulary
+from dataset import LineDataset, EncodedDataset, ZippedDataset, BatchedDataset, PaddedDataset, \
     TensorDataset
 
 

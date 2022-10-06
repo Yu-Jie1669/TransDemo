@@ -5,6 +5,9 @@ from paddle.io import IterableDataset
 from trandemo.data.iterator import IterBase, LineIter, EncodedIter, ZippedIter, BatchedIter, PaddedIter, TensorIter
 
 
+
+
+
 class DatasetBase(IterableDataset):
     def __init__(self):
         super(DatasetBase, self).__init__()
@@ -54,13 +57,12 @@ class BatchedDataset(DatasetBase):
 
 
 class PaddedDataset(DatasetBase):
-    def __init__(self, dataset,pad_idx):
+    def __init__(self, dataset, pad_idx):
         super(PaddedDataset, self).__init__()
-        self.iter=PaddedIter(dataset,pad_idx)
+        self.iter = PaddedIter(dataset, pad_idx)
+
 
 class TensorDataset(DatasetBase):
-    def __init__(self,dataset):
+    def __init__(self, dataset):
         super(TensorDataset, self).__init__()
-        self.iter=TensorIter(dataset)
-
-
+        self.iter = TensorIter(dataset)
