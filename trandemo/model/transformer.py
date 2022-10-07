@@ -28,6 +28,7 @@ class MultiheadAttention(nn.Layer):
         self.o_transform = nn.Linear(hidden_size, hidden_size)
 
     def forward(self, query, key, value, mask):
+
         q = self.q_transform(query)
         k = self.k_transform(key)
         v = self.v_transform(value)
@@ -35,6 +36,8 @@ class MultiheadAttention(nn.Layer):
         qh = self.split_heads(q)
         kh = self.split_heads(k)
         vh = self.split_heads(v)
+
+        mask=mask.unsqueeze(1)
 
         oh = self.attention(qh, kh, vh, mask)
 
@@ -45,7 +48,7 @@ class MultiheadAttention(nn.Layer):
 
     def attention(self, q, k, v, mask=None):
         d_k = k.shape[-1]
-        scores = paddle.matmul(q, k.transpose(-2, -1)) / math.sqrt(d_k)
+        scores = paddle.matmul(q, paddle.transpose(k,(0,1,3,2))) / math.sqrt(d_k)
         if mask is not None:
             scores = self.masked_fill(scores, mask, -1e9)
         attn = F.softmax(scores)
@@ -53,40 +56,51 @@ class MultiheadAttention(nn.Layer):
 
     def masked_fill(self, x, mask, value):
         y = paddle.full(x.shape, value, x.dtype)
-        return paddle.where(mask, y, x)
+        return paddle.where(mask, x, y)
 
     def split_heads(self, x):
         batch_size = x.shape[0]
         seq_len = x.shape[1]
         hidden_size = x.shape[2]
         x = x.reshape((batch_size, seq_len, self.head, hidden_size // self.head))
-        x = x.transpose((1, 2))
+        x = paddle.transpose(x, (0,2, 1,3))
         return x
 
     def combine_heads(self, x):
         batch_size = x.shape[0]
         seq_len = x.shape[2]
         hidden_size = x.shape[-1]
-        x = x.transpose((1, 2))
+        x = paddle.transpose(x, (0,2,1,3))
         x = x.reshape((batch_size, seq_len, hidden_size * self.head))
         return x
 
 
 class ResConnection(nn.Layer):
-    def __init__(self, hidden_size):
+    def __init__(self, hidden_size, p=0.1):
         super(ResConnection, self).__init__()
         self.norm = nn.LayerNorm(hidden_size)
+        self.dropout = nn.Dropout(p)
 
     def forward(self, x, sublayer):
-        return self.norm(x + sublayer(x))
+        return self.norm(x + self.dropout(sublayer(x)))
 
 
 class DecoderLayer(nn.Layer):
-    def __init__(self):
+    def __init__(self, head, hidden_size, ):
         super(DecoderLayer, self).__init__()
+        self.self_attn = MultiheadAttention(head, hidden_size)
+        self.crs_attn = MultiheadAttention(head, hidden_size)
+        self.ffn = FFNLayer(hidden_size, hidden_size)
 
-    def forward(self, *inputs, **kwargs):
-        pass
+        self.self_res_connect = ResConnection(hidden_size)
+        self.crs_res_connect = ResConnection(hidden_size)
+        self.ffn_res_connect = ResConnection(hidden_size)
+
+    def forward(self, x, memory, src_mask, tgt_mask):
+        x = self.self_res_connect(x, lambda x: self.self_attn(x, x, x, tgt_mask))
+        x = self.crs_res_connect(x, lambda x: self.crs_attn(x, memory, memory, src_mask))
+        x = self.ffn_res_connect(x, self.ffn)
+        return x
 
 
 class EncoderLayer(nn.Layer):
@@ -111,7 +125,7 @@ class PositionalEncoding(nn.Layer):
 
         pe = paddle.zeros((max_len, hidden_size))
         # position: [[0],[1],[2]...[max_len-1]]
-        position = paddle.arange(0, max_len).unsqueeze(1)
+        position = paddle.arange(0, max_len).unsqueeze(1).astype('float32')
         # div_term: (shape: [hidden_size//2,] )
         div_term = paddle.exp(paddle.arange(0, hidden_size, 2) *
                               -(math.log(10000.0) / hidden_size))
@@ -134,51 +148,60 @@ class PositionalEncoding(nn.Layer):
 
 
 class Decoder(nn.Layer):
-    def __init__(self, dec_num):
+    def __init__(self, dec_num, hidden_size):
         super(Decoder, self).__init__()
-        self.layers = nn.LayerList(DecoderLayer() for _ in range(dec_num))
+        self.layers = nn.LayerList(DecoderLayer(hidden_size=hidden_size, head=hidden_size) for _ in range(dec_num))
+        self.norm = nn.LayerNorm(hidden_size)
 
-    def forward(self, *inputs, **kwargs):
-        pass
+    def forward(self, memory, src_mask,tgt, tgt_mask):
+        for layer in self.layers:
+            tgt = layer(tgt, memory, src_mask, tgt_mask)
+        return self.norm(tgt)
 
 
 class Encoder(nn.Layer):
-    def __init__(self, enc_num):
+    def __init__(self, enc_num, head, hidden_size):
         super(Encoder, self).__init__()
-        self.layers = nn.LayerList(EncoderLayer() for _ in range(enc_num))
+        self.layers = nn.LayerList(EncoderLayer(head, hidden_size) for _ in range(enc_num))
+        self.norm = nn.LayerNorm(hidden_size)
 
-    def forward(self, x):
+    def forward(self, x, mask):
         for layer in self.layers:
-            x = layer(x)
-        return x
+            x = layer(x, mask)
+        return self.norm(x)
 
 
 class Transformer(nn.Layer):
-    def __init__(self, src_vocab, tgt_vocab, hidden_size, max_len, enc_num, dec_num):
+    def __init__(self, src_vocab, tgt_vocab, hidden_size, max_len, enc_num, dec_num, head):
         super(Transformer, self).__init__()
 
-        self.encEmb = nn.Embedding(embedding_dim=512, num_embeddings=len(src_vocab))
-        self.decEmb = nn.Embedding(embedding_dim=512, num_embeddings=len(tgt_vocab))
+        self.encEmb = nn.Embedding(embedding_dim=hidden_size, num_embeddings=len(src_vocab))
+        self.decEmb = nn.Embedding(embedding_dim=hidden_size, num_embeddings=len(tgt_vocab))
 
         self.posEnc = PositionalEncoding(hidden_size, max_len)
 
-        self.encoder = Encoder(enc_num=enc_num)
-        self.decoder = Decoder()
+        self.encoder = Encoder(enc_num=enc_num, head=head, hidden_size=hidden_size)
+        self.decoder = Decoder(dec_num=dec_num, hidden_size=hidden_size)
 
-        self.output_transform = nn.Linear(hidden_size, hidden_size)
+        self.output_transform = nn.Linear(hidden_size, len(tgt_vocab))
 
-    def forward(self, src, tgt):
+    def forward(self, src, tgt, pad=0):
         """
-        :param src:
+        :param pad:
+        :param src: [batch_size,len]
         :param tgt:
         :return:
         """
-        src_mask = self.getMask(src)
-        tgt_mask = self.getMask(tgt)
-        x = self.encoder(src, src_mask)
-        x = self.decoder(x, src_mask, tgt, tgt_mask)
-        proj = F.softmax(self.output_transform(x))
-        return proj
+        tgt = tgt[:, :-1]
+
+        src_mask = (src != pad).unsqueeze(-2)
+        tgt_mask = (tgt != pad).unsqueeze(-2)
+        tgt_mask = self.get_seq_mask(tgt_mask) & tgt_mask
+
+        x = self.encode(src, src_mask)
+        x = self.decode(x, src_mask, tgt, tgt_mask)
+        result = F.log_softmax(self.output_transform(x),axis=-1)
+        return result
 
     def encode(self, src, src_mask):
         x = self.encEmb(src)
@@ -187,23 +210,39 @@ class Transformer(nn.Layer):
 
     def decode(self, memory, src_mask, tgt, tgt_mask):
         x = self.decEmb(tgt)
-        x = paddle.concat((paddle.zeros((x.shape[0], 1, x.shape[-1])), x[:, 1:, :]), axis=1)
         x = self.posEnc(x)
         return self.decoder(memory, src_mask, x, tgt_mask)
 
+    # @staticmethod
+    # def ger_src_mask(x, pad=0):
+    #     """
+    #     :param pad:
+    #     :param x: padded_input [batch_size,len,hidden_size]
+    #     :return:
+    #     """
+    #     # pad的位置为1
+    #     mask = paddle.where(x != pad, 0, 1)
+    #     return mask
+
     @staticmethod
-    def getMask(x, pad=0):
+    def get_seq_mask(x):
         """
-        :param pad:
-        :param x: padded_input [batch_size,len,hidden_size]
+        :param x: padded_input [batch_size,len]
         :return:
         """
-        # pad的位置为1
-        mask = paddle.where(x != pad, 0, 1)
-        return mask
+        len_ = x.shape[-1]
+        attn_shape = (1, len_, len_)
+        subsequent_mask = paddle.triu(paddle.ones(attn_shape), diagonal=1)
+        return subsequent_mask == 0
 
     @staticmethod
     def base_setting():
         config_dict = {
-
+            "batch_size": 4096,
+            "hidden_size": 512,
+            "head": 8,
+            "enc_num": 6,
+            "dec_num": 6,
+            "max_len": 128
         }
+        return config_dict

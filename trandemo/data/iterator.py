@@ -1,10 +1,9 @@
 from typing import Iterator
 
+import numpy as np
 import paddle
 
 from trandemo.data.vocabulary import Vocabulary
-
-
 
 
 class IterBase(Iterator):
@@ -76,7 +75,7 @@ class ZippedIter(IterBase):
             idxs, len_ = next(dataset)
             data.append(idxs)
             lens.append(len_)
-        return tuple(data), tuple(lens)
+        return data, tuple(lens)
 
     def reset(self):
         for dataset in self._datasets:
@@ -109,10 +108,16 @@ class BatchedIter(IterBase):
 
 
 class PaddedIter(IterBase):
-    def __init__(self, dataset, pad_idx, pad_nums=None):
+    def __init__(self, dataset, pad_idx, max_len, pad_nums=None):
+        """
+        :param dataset:
+        :param pad_idx:
+        :param pad_nums: 对一条数据的前n句话pad
+        """
         super(PaddedIter, self).__init__(dataset)
         self._pad_idx = pad_idx
         self._pad_nums = pad_nums
+        self.max_len = max_len
 
     def __next__(self):
         batch_data, lens = next(self._dataset)
@@ -123,10 +128,14 @@ class PaddedIter(IterBase):
         max_lens = []
         for i in range(self._pad_nums):
             max_len = max([len_[i] for len_ in lens])
+            max_len=min(max_len,self.max_len)
             max_lens.append(max_len)
 
         for data in batch_data:
             for index in range(self._pad_nums):
+                if len(data[index]) > self.max_len:
+                    data[index] = data[index][:self.max_len]
+                    continue
                 while len(data[index]) < max_lens[index]:
                     data[index].append(self._pad_idx)
 
