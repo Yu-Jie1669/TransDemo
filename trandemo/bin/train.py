@@ -1,13 +1,18 @@
+
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
+import paddle.nn as nn
+import paddle
+import paddle.optimizer
 import time
 
-import paddle.optimizer
-import paddle
-import paddle.nn as nn
-from tqdm import tqdm
 
-from trandemo.model.transformer import Transformer
 from trandemo.data.pipeline import DataPipeline
 from trandemo.data.vocabulary import Vocabulary
+from trandemo.model.transformer import Transformer
+
 
 src_path = "../../data/corpus.tc.32k.zh.shuf"
 tgt_path = "../../data/corpus.tc.32k.en.shuf"
@@ -34,4 +39,12 @@ for i, data in enumerate(dataset):
     tgt_y = tgt[:, 1:]
     t = time.time()
     result = model(src, tgt)
-    print("iter %d ok, cost %.3f seconds" % (i, time.time() - t))
+    loss = loss_compute(result, tgt_y)
+
+    loss.backward()
+    optimizer.step()
+    optimizer.clear_grad()
+
+
+    print("iter %d ok, loss = %.4f, cost %.3f seconds" %
+          (i, loss, time.time() - t))

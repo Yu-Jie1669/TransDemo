@@ -238,7 +238,7 @@ class Transformer(nn.Layer):
     @staticmethod
     def base_setting():
         config_dict = {
-            "batch_size": 4096,
+            "batch_size": 4,
             "hidden_size": 512,
             "head": 8,
             "enc_num": 6,
